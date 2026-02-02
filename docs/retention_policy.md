@@ -1,0 +1,1 @@
+Partition-based retention policy.
