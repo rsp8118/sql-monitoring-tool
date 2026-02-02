@@ -1,5 +1,5 @@
 
-# SQL Server session usage collector (ACTIVE + INACTIVE, NOT NULL SAFE)
+# SQL Server session usage collector (AGGREGATED: Instance + DB + Login + State)
 
 $RepoServer = "SQLMON01"
 $RepoDb     = "SqlMonitorRepo"
@@ -21,14 +21,15 @@ foreach ($i in $instances) {
     } catch {}
 
     try {
-        $sessions = Invoke-Sqlcmd -ServerInstance $i.InstanceName -Database master -Query "
+        $agg = Invoke-Sqlcmd -ServerInstance $i.InstanceName -Database master -Query "
         SELECT
-            s.login_name,
             DB_NAME(s.database_id) AS DatabaseName,
+            s.login_name           AS LoginName,
             CASE 
                 WHEN r.session_id IS NULL THEN 'INACTIVE'
                 ELSE 'ACTIVE'
-            END AS SessionState
+            END AS SessionState,
+            COUNT(*) AS SessionCount
         FROM sys.dm_exec_sessions s
         LEFT JOIN sys.dm_exec_requests r
             ON s.session_id = r.session_id
@@ -37,6 +38,13 @@ foreach ($i in $instances) {
         WHERE
             s.is_user_process = 1
             AND d.database_id > 4
+        GROUP BY
+            s.database_id,
+            s.login_name,
+            CASE 
+                WHEN r.session_id IS NULL THEN 'INACTIVE'
+                ELSE 'ACTIVE'
+            END
         " -ErrorAction Stop
     }
     catch {
@@ -45,13 +53,13 @@ foreach ($i in $instances) {
             SET LastCollectionStatus='FAILED',
                 LastCollectionTime=SYSDATETIME(),
                 ConsecutiveFailCount = ConsecutiveFailCount + 1,
-                LastErrorMessage='Session query failed'
+                LastErrorMessage='Session aggregation failed'
             WHERE InstanceId=$($i.InstanceId)
         "
         continue
     }
 
-    foreach ($row in $sessions) {
+    foreach ($row in $agg) {
         try {
             Invoke-Sqlcmd -ServerInstance $RepoServer -Database $RepoDb -Query "
             INSERT INTO metrics.DatabaseSessionUsage
@@ -60,9 +68,9 @@ foreach ($i in $instances) {
             ($($i.InstanceId),
              '$($i.InstanceName)',
              '$($row.DatabaseName)',
-             '$($row.login_name)',
+             '$($row.LoginName)',
              '$($row.SessionState)',
-             CASE WHEN '$($row.SessionState)' = 'ACTIVE' THEN 1 ELSE 0 END,
+             $($row.SessionCount),
              SYSDATETIME())
             "
         } catch {}
