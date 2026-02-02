@@ -1,5 +1,5 @@
 
-# SQL Server session usage collector (AGGREGATED: Instance + DB + Login + State)
+# SQL Server session usage collector (AGGREGATED, FIXED DIMENSIONS)
 
 $RepoServer = "SQLMON01"
 $RepoDb     = "SqlMonitorRepo"
@@ -12,6 +12,7 @@ WHERE IsSuspended = 0
 
 foreach ($i in $instances) {
 
+    # mark attempt
     try {
         Invoke-Sqlcmd -ServerInstance $RepoServer -Database $RepoDb -Query "
             UPDATE inventory.Instances
@@ -23,13 +24,13 @@ foreach ($i in $instances) {
     try {
         $agg = Invoke-Sqlcmd -ServerInstance $i.InstanceName -Database master -Query "
         SELECT
-            DB_NAME(s.database_id) AS DatabaseName,
-            s.login_name           AS LoginName,
+            DB_NAME(s.database_id)                      AS DatabaseName,
+            COALESCE(s.login_name,'UNKNOWN')            AS LoginName,
             CASE 
                 WHEN r.session_id IS NULL THEN 'INACTIVE'
                 ELSE 'ACTIVE'
-            END AS SessionState,
-            COUNT(*) AS SessionCount
+            END                                         AS SessionState,
+            COUNT(*)                                   AS SessionCount
         FROM sys.dm_exec_sessions s
         LEFT JOIN sys.dm_exec_requests r
             ON s.session_id = r.session_id
@@ -39,8 +40,8 @@ foreach ($i in $instances) {
             s.is_user_process = 1
             AND d.database_id > 4
         GROUP BY
-            s.database_id,
-            s.login_name,
+            DB_NAME(s.database_id),
+            COALESCE(s.login_name,'UNKNOWN'),
             CASE 
                 WHEN r.session_id IS NULL THEN 'INACTIVE'
                 ELSE 'ACTIVE'
