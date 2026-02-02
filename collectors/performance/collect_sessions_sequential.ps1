@@ -1,5 +1,5 @@
 
-# SQL Server session usage collector (ACTIVE + INACTIVE USER SESSIONS)
+# SQL Server session usage collector (ACTIVE + INACTIVE, NOT NULL SAFE)
 
 $RepoServer = "SQLMON01"
 $RepoDb     = "SqlMonitorRepo"
@@ -14,16 +14,15 @@ foreach ($i in $instances) {
 
     try {
         Invoke-Sqlcmd -ServerInstance $RepoServer -Database $RepoDb -Query "
-        UPDATE inventory.Instances
-        SET LastAttemptTime = SYSDATETIME()
-        WHERE InstanceId = $($i.InstanceId)
+            UPDATE inventory.Instances
+            SET LastAttemptTime = SYSDATETIME()
+            WHERE InstanceId = $($i.InstanceId)
         "
     } catch {}
 
     try {
         $sessions = Invoke-Sqlcmd -ServerInstance $i.InstanceName -Database master -Query "
         SELECT
-            s.session_id,
             s.login_name,
             DB_NAME(s.database_id) AS DatabaseName,
             CASE 
@@ -38,16 +37,16 @@ foreach ($i in $instances) {
         WHERE
             s.is_user_process = 1
             AND d.database_id > 4
-        "
+        " -ErrorAction Stop
     }
     catch {
         Invoke-Sqlcmd -ServerInstance $RepoServer -Database $RepoDb -Query "
-        UPDATE inventory.Instances
-        SET LastCollectionStatus='FAILED',
-            LastCollectionTime=SYSDATETIME(),
-            ConsecutiveFailCount = ConsecutiveFailCount + 1,
-            LastErrorMessage='Session query failed'
-        WHERE InstanceId=$($i.InstanceId)
+            UPDATE inventory.Instances
+            SET LastCollectionStatus='FAILED',
+                LastCollectionTime=SYSDATETIME(),
+                ConsecutiveFailCount = ConsecutiveFailCount + 1,
+                LastErrorMessage='Session query failed'
+            WHERE InstanceId=$($i.InstanceId)
         "
         continue
     }
@@ -56,24 +55,25 @@ foreach ($i in $instances) {
         try {
             Invoke-Sqlcmd -ServerInstance $RepoServer -Database $RepoDb -Query "
             INSERT INTO metrics.DatabaseSessionUsage
-            (InstanceId, InstanceName, DatabaseName, LoginName, SessionState, SampleTime)
+            (InstanceId, InstanceName, DatabaseName, LoginName, SessionState, ActiveSessionCount, SampleTime)
             VALUES
             ($($i.InstanceId),
              '$($i.InstanceName)',
              '$($row.DatabaseName)',
              '$($row.login_name)',
              '$($row.SessionState)',
+             CASE WHEN '$($row.SessionState)' = 'ACTIVE' THEN 1 ELSE 0 END,
              SYSDATETIME())
             "
         } catch {}
     }
 
     Invoke-Sqlcmd -ServerInstance $RepoServer -Database $RepoDb -Query "
-    UPDATE inventory.Instances
-    SET LastCollectionStatus='SUCCESS',
-        LastCollectionTime=SYSDATETIME(),
-        ConsecutiveFailCount=0,
-        LastErrorMessage=NULL
-    WHERE InstanceId=$($i.InstanceId)
+        UPDATE inventory.Instances
+        SET LastCollectionStatus='SUCCESS',
+            LastCollectionTime=SYSDATETIME(),
+            ConsecutiveFailCount=0,
+            LastErrorMessage=NULL
+        WHERE InstanceId=$($i.InstanceId)
     "
 }
